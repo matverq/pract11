@@ -7,33 +7,31 @@
 using namespace std;
 
 const int maxRobots = 10;
-const int maxTests = 100;
-
-int m_tests[maxTests];
-int m_testcount;
 
 struct Robot {
-    int id;
-    int energy;
-    int score;
-    bool finish;
-    bool paused;
+    int id = 0;
+    int energy = 60;
+    int score = 0;
+    bool finish = false;
+    bool paused = false;
+    int* tests;
+    int testCount;
 
-    HANDLE hThread;
-    DWORD threadId;
+    HANDLE hThread = NULL;
 };
 
 DWORD WINAPI RobotThread(LPVOID lpParam) {
     Robot* r = static_cast<Robot*>(lpParam);
 
-    srand(GetCurrentThreadId());
+    srand(time(NULL) + r->id);
+    Sleep(r->id * 200);
 
     string mes1 = "Робот " + to_string(r->id) + " начал испытание\n";
     cout << mes1;
 
-    for (int i = 0; i < m_testcount; i++)
+    for (int i = 0; i < r->testCount; i++)
     {
-        int type = m_tests[i];
+        int type = r->tests[i];
         int duration = 0;
         bool canPas = true;
 
@@ -43,8 +41,7 @@ DWORD WINAPI RobotThread(LPVOID lpParam) {
         case 2: duration = 4; canPas = (r->energy >= 20); break;
         case 3: duration = 1 + rand() % 5; canPas = true; break;
         case 4: duration = 10; canPas = (r->energy >= 60); break;
-        default:
-            continue;
+        default: continue;
         }
 
         if (!canPas) {
@@ -69,9 +66,10 @@ DWORD WINAPI RobotThread(LPVOID lpParam) {
             cout << mes4;
         }
 
-        if (i + 1 < m_testcount) Sleep((1 + rand() % 3) * 1000);
+        if (i + 1 < r->testCount) Sleep((1 + rand() % 3) * 1000);
     }
     r->finish = true;
+
     string mes5 = "Робот " + to_string(r->id) + " закончил все испытания, очков: " + to_string(r->score) + "\n";
     cout << mes5;
     return 0;
@@ -80,63 +78,55 @@ DWORD WINAPI RobotThread(LPVOID lpParam) {
 int main()
 {
     setlocale(LC_ALL, "Russian");
-    srand(static_cast<unsigned int>(time(NULL)));
-    int t;
-
     ifstream file("arena.dat", ios::binary);
     if (!file) {
-        cout << "Файл не найден";
+        cout << "Файл не найден\n";
         return 1;
     }
-    
-    while (file.read(reinterpret_cast<char*>(&t), sizeof(int)) && m_testcount < maxTests) {
-        m_tests[m_testcount++] = t;
-    }
+
+    file.seekg(0, ios::end);
+    int fileSize = file.tellg();
+    file.seekg(0, ios::beg);
+
+    int totalTests = fileSize / sizeof(int);
+    int* allTests = new int[totalTests];
+
+    file.read(reinterpret_cast<char*>(allTests), fileSize);
     file.close();
 
-    if (m_testcount == 0) {
-        cout << "В файле нет верных данных\n";
-        return 1;
-    }
+    cout << "Загружено испытаний: " << totalTests << "\n";
 
-    cout << "Загружено испытаний: " << m_testcount << "\n";
-
-    int num_robots = 0;
-    while (num_robots < 3 || num_robots > maxRobots) {
-        cout << "Введите число роботов (3..10): ";
-        cin >> num_robots;
+    int numRobots = 0;
+    while (numRobots < 3 || numRobots > maxRobots) {
+        cout << "Введите число роботов (3-10): ";
+        cin >> numRobots;
         cin.ignore();
     }
+    Robot* robots = new Robot[numRobots];
 
-    Robot robots[maxRobots];
-
-    for (int i = 0; i < num_robots; i++) {
+    for (int i = 0; i < numRobots; i++) {
         robots[i].id = i + 1;
-        robots[i].energy = 60;
-        robots[i].score = 0;
-        robots[i].finish = false;
-        robots[i].paused = false;
+        robots[i].tests = allTests;
+        robots[i].testCount = totalTests;
 
-        robots[i].hThread = CreateThread(NULL, 0, RobotThread, &robots[i], 0, &robots[i].threadId);
+        robots[i].hThread = CreateThread(NULL, 0, RobotThread, &robots[i], 0, NULL);
     }
-
     cout << "Нажмите цифру робота (1-9) для паузы/продолжения.\n";
 
     while (true) {
         bool allFinished = true;
-        for (int i = 0; i < num_robots; i++) {
+        for (int i = 0; i < numRobots; i++) {
             if (!robots[i].finish) {
                 allFinished = false;
                 break;
             }
         }
         if (allFinished) break;
-
         if (_kbhit()) {
             char c = _getch();
             int idx = c - '1';
 
-            if (idx >= 0 && idx < num_robots && !robots[idx].finish) {
+            if (idx >= 0 && idx < numRobots && !robots[idx].finish) {
                 if (!robots[idx].paused) {
                     SuspendThread(robots[idx].hThread);
                     robots[idx].paused = true;
@@ -152,13 +142,13 @@ int main()
         Sleep(50);
     }
 
-    for (int i = 0; i < num_robots; i++) {
+    for (int i = 0; i < numRobots; i++) {
         WaitForSingleObject(robots[i].hThread, INFINITE);
         CloseHandle(robots[i].hThread);
     }
 
-    for (int i = 0; i < num_robots - 1; i++) {
-        for (int j = 0; j < num_robots - i - 1; j++) {
+    for (int i = 0; i < numRobots - 1; i++) {
+        for (int j = 0; j < numRobots - i - 1; j++) {
             if (robots[j].score < robots[j + 1].score) {
                 Robot temp = robots[j];
                 robots[j] = robots[j + 1];
@@ -166,16 +156,17 @@ int main()
             }
         }
     }
-
     cout << "\nРезультаты:\n";
-    for (int i = 0; i < num_robots; i++) {
+    for (int i = 0; i < numRobots; i++) {
         cout << "Робот " << robots[i].id << ": Очки = " << robots[i].score << ", Энергия = " << robots[i].energy << "\n";
     }
 
-    if (num_robots > 1 && robots[0].score == robots[1].score) {
+    if (numRobots > 1 && robots[0].score == robots[1].score) {
         cout << "Ничья\n";
     }
     else {
         cout << "Победитель: Робот " << robots[0].id << "\n";
     }
+    delete[] allTests;
+    delete[] robots;
 }
